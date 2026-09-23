@@ -27,7 +27,15 @@ $attributes = @(
     'proxyAddresses', 'displayName', 'givenName', 'surname', 'enabled'
 )
 
-$users = Get-ADUser -Filter * -Properties $attributes | ForEach-Object {
+# Only objects in organizational units. The built-in CN=Users container holds
+# krbtgt, Guest and the machine's own administrator, none of which are ever in
+# sync scope -- and the first live run duly reported all three as Blocking for
+# having no userPrincipalName, which is true and completely useless. An
+# assessment that reports on objects that will never sync is generating exactly
+# the noise this lab exists to avoid, so the export is scoped the way a real
+# one would be: to what is actually going to be synchronised.
+$users = Get-ADUser -Filter * -Properties $attributes |
+    Where-Object { $_.DistinguishedName -match ',OU=' } | ForEach-Object {
     $record = [ordered]@{
         sAMAccountName    = $_.sAMAccountName
         distinguishedName = $_.distinguishedName

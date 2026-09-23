@@ -100,22 +100,27 @@ foreach ($user in $plan.users) {
         ChangePasswordAtLogon = $false
     }
 
-    # New-ADUser refuses a malformed userPrincipalName, and two of the planted
-    # defects are malformed on purpose. They are set afterwards with
-    # Set-ADObject, which writes the attribute without validating it -- which
-    # is also how they get into a real forest.
-    $deferredUpn = $null
-    if ($user.PSObject.Properties['upn'] -and $user.upn) {
-        if ($user.upn -match '\s') { $deferredUpn = $user.upn }
-        else { $arguments['UserPrincipalName'] = $user.upn }
-    }
-
+    # Every userPrincipalName is written after creation, never passed to
+    # New-ADUser. Two reasons, and the second cost a live run:
+    #
+    # New-ADUser validates the format, so a deliberately malformed value is
+    # refused outright.
+    #
+    # Active Directory also enforces UPN uniqueness at creation, so the second
+    # half of a duplicate pair is refused -- and with ErrorActionPreference
+    # Stop that aborted the whole script, leaving eight of twelve objects
+    # uncreated and the assessment reporting their defects as "not found".
+    #
+    # Set-ADObject writes the attribute without either check, which is also how
+    # duplicates and malformed names get into real forests: not through the
+    # account creation tooling, but through something writing attributes
+    # directly afterwards.
     New-ADUser @arguments
     $created++
 
     $target = "CN=$($user.sam),$path"
-    if ($deferredUpn) {
-        Set-ADObject -Identity $target -Replace @{ userPrincipalName = $deferredUpn }
+    if ($user.PSObject.Properties['upn'] -and $user.upn) {
+        Set-ADObject -Identity $target -Replace @{ userPrincipalName = $user.upn }
     }
 
     if ($user.PSObject.Properties['proxyAddresses'] -and $user.proxyAddresses) {
@@ -129,4 +134,16 @@ foreach ($user in $plan.users) {
     Write-Output "USER $($user.sam) defect=$(if ($user.defect) { $user.defect } else { 'none' })"
 }
 
-Write-Output "CREATED $created"
+# The count is asserted here rather than left for the assessment to notice.
+# When this script aborted part way through, the symptom three steps later was
+# an assessment reporting declared defects as "not found" -- which reads like a
+# broken check rather than a directory that was never fully built. A step that
+# half-succeeded has to say so at the point it happens.
+$expected = @($plan.users).Count
+$present = @(Get-ADUser -Filter * -SearchBase $root -SearchScope Subtree |
+    Where-Object { $_.DistinguishedName -match ',OU=' }).Count
+
+Write-Output "CREATED $created EXPECTED $expected PRESENT $present"
+if ($present -lt $expected) {
+    throw "The plan declares $expected users and the forest holds $present in its organizational units. The assessment would report the missing ones as defects it failed to find."
+}
