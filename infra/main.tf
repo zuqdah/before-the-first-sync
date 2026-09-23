@@ -107,10 +107,10 @@ resource "azurerm_windows_virtual_machine" "dc" {
   # Manual patching, because this machine lives about twenty-five minutes and
   # an automatic update rebooting it mid-assessment would look exactly like the
   # promotion reboot the workflow is already waiting through. Azure requires
-  # enable_automatic_updates to be false alongside it and rejects the pair at
+  # automatic_updates_enabled to be false alongside it and rejects the pair at
   # apply time otherwise, which is a 400 rather than a plan-time error.
-  patch_mode               = "Manual"
-  enable_automatic_updates = false
+  patch_mode                = "Manual"
+  automatic_updates_enabled = false
 
   tags = {
     lab = var.prefix
