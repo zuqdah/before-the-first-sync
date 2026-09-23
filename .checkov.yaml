@@ -1,0 +1,13 @@
+directory:
+  - infra
+framework:
+  - terraform
+  - github_actions
+quiet: true
+compact: true
+
+skip-check:
+  # CKV_GHA_7 wants workflow_dispatch inputs empty so build output cannot be
+  # influenced by a caller. This workflow builds nothing, and its input selects
+  # which phase of the assessment to run.
+  - CKV_GHA_7

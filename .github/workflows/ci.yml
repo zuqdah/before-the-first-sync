@@ -1,0 +1,156 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  TF_IN_AUTOMATION: "true"
+  TF_VERSION: "1.16.3"
+
+jobs:
+  powershell:
+    name: Analyze, test and check the plan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install tooling
+        shell: pwsh
+        run: |
+          Set-PSRepository PSGallery -InstallationPolicy Trusted
+          Install-Module Pester -MinimumVersion 5.5.0 -Force -SkipPublisherCheck
+          Install-Module PSScriptAnalyzer -MinimumVersion 1.22.0 -Force
+
+      - name: Analyze
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Import-Module PSScriptAnalyzer -ErrorAction Stop
+
+          # A crashed or unloadable analyzer reports zero findings, which reads
+          # exactly like a clean scan. Assert it loaded before believing it.
+          if (-not (Get-Command Invoke-ScriptAnalyzer -ErrorAction SilentlyContinue)) {
+            throw 'PSScriptAnalyzer did not load. A scan that cannot run must fail, not pass quietly.'
+          }
+
+          $results = @()
+          foreach ($tree in 'module', 'scripts') {
+            $results += Invoke-ScriptAnalyzer -Path $tree -Recurse -ErrorAction Stop
+          }
+          $results += Invoke-ScriptAnalyzer -Path tests -Recurse -ErrorAction Stop `
+            -ExcludeRule PSReviewUnusedParameter, PSUseShouldProcessForStateChangingFunctions
+
+          if ($results.Count) {
+            $results | Format-Table -AutoSize RuleName, Severity, ScriptName, Line, Message |
+              Out-String -Width 200 | Write-Host
+            throw "PSScriptAnalyzer reported $($results.Count) issue(s)."
+          }
+          Write-Host 'PSScriptAnalyzer is clean.'
+
+      # Every judgement about whether an object will survive its first sync is
+      # testable without a forest. If these ever need a domain controller to
+      # run, that separation is gone.
+      - name: Test
+        shell: pwsh
+        run: |
+          Import-Module Pester -MinimumVersion 5.5.0
+          $config = New-PesterConfiguration
+          $config.Run.Path = 'tests'
+          $config.Run.Exit = $true
+          $config.Output.Verbosity = 'Detailed'
+          $config.TestResult.Enabled = $true
+          $config.TestResult.OutputPath = 'testResults.xml'
+          Invoke-Pester -Configuration $config
+
+      # The planted defects are the yardstick the live assessment is graded
+      # against, so a plan that declares a defect no check can produce would
+      # make the proof unfalsifiable.
+      - name: Check the object plan is coherent
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $plan = [System.IO.File]::ReadAllText('lab-objects.json') | ConvertFrom-Json
+
+          $users = @($plan.users)
+          if (-not $users.Count) { throw 'The plan defines no users.' }
+
+          $withDefects = @($users | Where-Object { $_.defect })
+          $clean = @($users | Where-Object { -not $_.defect })
+          if (-not $withDefects.Count) { throw 'No defect is planted, so the assessment cannot be shown to find anything.' }
+          if (-not $clean.Count) { throw 'No object is declared clean, so nothing would catch a check that fires on everything.' }
+
+          foreach ($user in $withDefects) {
+            if (-not $user.expect) { throw "$($user.sam) declares defect '$($user.defect)' with no stated expectation." }
+          }
+          foreach ($user in $users) {
+            if (-not $user.note) { throw "$($user.sam) has no note explaining why it is in the plan." }
+          }
+
+          $ous = @($plan.organizationalUnits.name)
+          foreach ($user in $users) {
+            if ($user.ou -notin $ous) { throw "$($user.sam) is in OU '$($user.ou)', which the plan does not define." }
+          }
+          foreach ($side in 'before', 'after') {
+            foreach ($ou in @($plan.scopeChange.$side.includeOu) + @($plan.scopeChange.$side.excludeOu)) {
+              if ($ou -notin $ous) { throw "The '$side' scope names OU '$ou', which the plan does not define." }
+            }
+          }
+
+          if (-not $plan.verifiedDomains.Count) { throw 'No verified domain is declared, so every suffix check would come back Unevaluated.' }
+
+          Write-Host "$($users.Count) objects, $($withDefects.Count) with planted defects, $($clean.Count) declared clean."
+          @(
+            '### Object plan'
+            ''
+            "**$($users.Count)** objects: **$($withDefects.Count)** with planted defects, **$($clean.Count)** declared clean."
+            ''
+            "Scope change tolerates **$($plan.scopeChange.deletionThreshold)** deletion(s)."
+          ) | Out-File $env:GITHUB_STEP_SUMMARY -Append
+
+      - uses: actions/upload-artifact@v5
+        if: always()
+        with:
+          name: test-results
+          path: testResults.xml
+          if-no-files-found: warn
+
+  terraform:
+    name: Terraform format, validate, lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+      - name: Format
+        run: terraform fmt -check -recursive
+      - name: Validate
+        run: |
+          terraform -chdir=infra init -backend=false -input=false
+          terraform -chdir=infra validate
+      - uses: terraform-linters/setup-tflint@v6
+      - name: Lint
+        run: |
+          tflint --init --config "$GITHUB_WORKSPACE/.tflint.hcl"
+          tflint --recursive --config "$GITHUB_WORKSPACE/.tflint.hcl"
+
+  shell:
+    name: Shellcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: shellcheck scripts/*.sh
+
+  security:
+    name: Checkov policy scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: bridgecrewio/checkov-action@v12
+        with:
+          config_file: .checkov.yaml

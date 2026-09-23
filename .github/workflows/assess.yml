@@ -1,0 +1,178 @@
+name: Assess
+
+# Manual only. This builds a domain controller, and nothing about that should
+# happen because a branch moved.
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  TF_IN_AUTOMATION: "true"
+  TF_VERSION: "1.16.3"
+
+jobs:
+  assess:
+    name: Build a forest, assess it, remediate, assess again
+    runs-on: ubuntu-latest
+    environment: lab
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Mask identifiers
+        run: |
+          echo "::add-mask::${{ secrets.AZURE_TENANT_ID }}"
+          echo "::add-mask::${{ secrets.AZURE_CLIENT_ID }}"
+          echo "::add-mask::${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      - uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Init
+        run: terraform -chdir=infra init -input=false
+
+      - name: Apply
+        env:
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: terraform -chdir=infra apply -input=false -auto-approve
+
+      - name: Collect outputs
+        id: out
+        run: |
+          set -euo pipefail
+          terraform -chdir=infra output -json > outputs.json
+          # jq -e so an output the apply never produced fails here rather than
+          # arriving as an empty string several steps later.
+          for k in resource_group vm_name domain_name; do
+            echo "${k}=$(jq -e -r ".${k}.value" outputs.json)" >> "$GITHUB_OUTPUT"
+          done
+
+      # Run Command talks to the guest agent, not to the VM, and the agent
+      # reports ready a while after the resource does. Invoking too early fails
+      # in a way that looks like the script is wrong rather than absent.
+      - name: Wait for the guest agent
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 40); do
+            status=$(az vm get-instance-view \
+              --resource-group "${{ steps.out.outputs.resource_group }}" \
+              --name "${{ steps.out.outputs.vm_name }}" \
+              --query "instanceView.vmAgent.statuses[0].code" -o tsv 2>/dev/null || true)
+            echo "  agent: ${status:-unknown} (check $i)"
+            [ "$status" = "ProvisioningState/succeeded" ] && exit 0
+            sleep 15
+          done
+          echo "The guest agent never became ready, so Run Command cannot reach the machine." >&2
+          exit 1
+
+      - name: Promote to a domain controller
+        run: |
+          set -euo pipefail
+          az vm run-command invoke \
+            --resource-group "${{ steps.out.outputs.resource_group }}" \
+            --name "${{ steps.out.outputs.vm_name }}" \
+            --command-id RunPowerShellScript \
+            --scripts @scripts/vm/Install-Forest.ps1 \
+            --parameters "DomainName=${{ steps.out.outputs.domain_name }}" \
+            --query "value[0].message" -o tsv | tail -20
+
+      # Promotion reboots, which Run Command cannot span. The agent goes away
+      # and comes back, so this waits for the second appearance rather than the
+      # first -- a check that passes immediately would be seeing the agent that
+      # is about to disappear.
+      - name: Wait for the reboot to finish
+        run: |
+          set -euo pipefail
+          sleep 60
+          for i in $(seq 1 40); do
+            status=$(az vm get-instance-view \
+              --resource-group "${{ steps.out.outputs.resource_group }}" \
+              --name "${{ steps.out.outputs.vm_name }}" \
+              --query "instanceView.vmAgent.statuses[0].code" -o tsv 2>/dev/null || true)
+            echo "  agent after reboot: ${status:-unknown} (check $i)"
+            [ "$status" = "ProvisioningState/succeeded" ] && sleep 45 && exit 0
+            sleep 15
+          done
+          echo "The machine never came back from promotion." >&2
+          exit 1
+
+      # Only what the machine reads: the notes and expectations in the plan are
+      # for people and for the grader, and Run Command parameters are not the
+      # place to send prose.
+      - name: Build the directory objects
+        run: |
+          set -euo pipefail
+          payload=$(jq -c '{organizationalUnits, users: [.users[] | {sam, upn, ou, proxyAddresses, enabled}]}' lab-objects.json \
+            | gzip -9 | base64 -w0)
+          echo "plan payload: ${#payload} bytes encoded"
+          az vm run-command invoke \
+            --resource-group "${{ steps.out.outputs.resource_group }}" \
+            --name "${{ steps.out.outputs.vm_name }}" \
+            --command-id RunPowerShellScript \
+            --scripts @scripts/vm/New-LabObjects.ps1 \
+            --parameters "ObjectSetBase64=$payload" \
+            --query "value[0].message" -o tsv | tail -25
+
+      - name: Read the forest
+        id: facts
+        run: ./scripts/read-forest.sh "${{ steps.out.outputs.resource_group }}" "${{ steps.out.outputs.vm_name }}" forest-facts.json
+
+      - name: Assess it
+        shell: pwsh
+        run: |
+          ./scripts/Invoke-ReadinessAssessment.ps1 `
+            -FactsPath 'forest-facts.json' -PlanPath 'lab-objects.json' `
+            -Phase 'initial' -ReportPath 'readiness-initial.json'
+
+      - name: Remediate what is safe to remediate
+        run: |
+          set -euo pipefail
+          az vm run-command invoke \
+            --resource-group "${{ steps.out.outputs.resource_group }}" \
+            --name "${{ steps.out.outputs.vm_name }}" \
+            --command-id RunPowerShellScript \
+            --scripts @scripts/vm/Repair-ForestObjects.ps1 \
+            --query "value[0].message" -o tsv | tail -25
+
+      - name: Read the forest again
+        run: ./scripts/read-forest.sh "${{ steps.out.outputs.resource_group }}" "${{ steps.out.outputs.vm_name }}" forest-facts-after.json
+
+      # The second pass is where the remediation boundary is proven. The
+      # mechanical fixes must be gone and the judgement calls must still be
+      # there; a pass that came back clean would mean the remediation had
+      # decided something it had no standing to decide.
+      - name: Assess it again
+        shell: pwsh
+        run: |
+          ./scripts/Invoke-ReadinessAssessment.ps1 `
+            -FactsPath 'forest-facts-after.json' -PlanPath 'lab-objects.json' `
+            -Phase 'remediated' -ReportPath 'readiness-remediated.json'
+
+      - uses: actions/upload-artifact@v5
+        if: always()
+        with:
+          name: readiness-reports
+          path: |
+            readiness-initial.json
+            readiness-remediated.json
+            forest-facts.json
+            forest-facts-after.json
+          if-no-files-found: warn
+
+      # A domain controller bills for every hour it exists, so teardown runs
+      # even when the assessment failed. A lab that only cleans up on the happy
+      # path bills for its own bugs.
+      - name: Tear down
+        if: always()
+        env:
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        run: terraform -chdir=infra destroy -input=false -auto-approve

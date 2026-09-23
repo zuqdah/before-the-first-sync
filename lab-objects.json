@@ -1,0 +1,118 @@
+{
+  "$comment": "The forest this lab builds, and the defects planted in it. Every defect names the finding the assessment must produce, so the proof asserts the assessment found exactly what was planted rather than merely finding something. A check that fires on everything and a check that fires on the right things look identical until you write this file down.",
+  "verifiedDomains": ["example.com"],
+  "organizationalUnits": [
+    { "name": "Staff", "note": "In sync scope." },
+    { "name": "Service", "parent": "Staff", "note": "Nested, and excluded from scope. Exists to prove exclusion beats inclusion." },
+    { "name": "Retired", "note": "Out of scope entirely, and the container the scope-narrowing comparison moves." }
+  ],
+  "users": [
+    {
+      "sam": "aclean",
+      "upn": "aclean@example.com",
+      "ou": "Staff",
+      "proxyAddresses": ["SMTP:aclean@example.com"],
+      "defect": null,
+      "note": "The control. If the assessment reports anything about this object, it is reporting noise."
+    },
+    {
+      "sam": "bunverified",
+      "upn": "bunverified@corp.local",
+      "ou": "Staff",
+      "defect": "UnverifiedSuffix",
+      "expect": "Blocking on userPrincipalName, mentioning that the suffix is not verified",
+      "note": "The commonest defect in any real forest: an internal .local namespace that cannot be verified in a tenant. The object syncs anyway and the sign-in name is rewritten, so the symptom is a user who cannot sign in rather than a sync error."
+    },
+    {
+      "sam": "cnoupn",
+      "upn": null,
+      "ou": "Staff",
+      "defect": "MissingUpn",
+      "expect": "Blocking on userPrincipalName, stating that the other checks could not run",
+      "note": "Proves the assessment refuses to report a suffix as valid when there is no suffix to read."
+    },
+    {
+      "sam": "dspaced",
+      "upn": "d spaced@example.com",
+      "ou": "Staff",
+      "defect": "IllegalUpnCharacter",
+      "expect": "Blocking on userPrincipalName, listing the refused character",
+      "note": "A space. Entra refuses it outright."
+    },
+    {
+      "sam": "edupe",
+      "upn": "shared@example.com",
+      "ou": "Staff",
+      "proxyAddresses": ["SMTP:shared@example.com"],
+      "defect": "DuplicateUpn",
+      "expect": "Blocking duplicate on userPrincipalName, naming both edupe and fdupe",
+      "note": "One half of a pair. Uniqueness cannot be judged an object at a time, which is why this needs the whole set."
+    },
+    {
+      "sam": "fdupe",
+      "upn": "shared@example.com",
+      "ou": "Staff",
+      "defect": "DuplicateUpn",
+      "expect": "Blocking duplicate on userPrincipalName, naming both edupe and fdupe",
+      "note": "The other half."
+    },
+    {
+      "sam": "gprimary",
+      "upn": "gprimary@example.com",
+      "ou": "Staff",
+      "proxyAddresses": ["SMTP:Sales@Example.com"],
+      "defect": "DuplicateAddressAcrossCase",
+      "expect": "Blocking duplicate on proxyAddresses for smtp:sales@example.com",
+      "note": "Holds the address as a primary, in mixed case."
+    },
+    {
+      "sam": "halias",
+      "upn": "halias@example.com",
+      "ou": "Staff",
+      "proxyAddresses": ["SMTP:halias@example.com", "smtp:sales@example.com"],
+      "defect": "DuplicateAddressAcrossCase",
+      "expect": "Blocking duplicate on proxyAddresses for smtp:sales@example.com",
+      "note": "Holds the same address as a lowercase alias. Read the two raw values side by side and they look different; Entra refuses both objects."
+    },
+    {
+      "sam": "ileaver",
+      "upn": "jcurrent@example.com",
+      "ou": "Retired",
+      "enabled": false,
+      "defect": "DisabledDuplicate",
+      "expect": "Blocking duplicate on userPrincipalName, and the detail must say the disabled object is not exempt",
+      "note": "A disabled leaver holding the name a current employee needs. Invisible in every list anybody thinks to check, and the reason the new starter will not sync."
+    },
+    {
+      "sam": "jcurrent",
+      "upn": "jcurrent@example.com",
+      "ou": "Staff",
+      "defect": "DisabledDuplicate",
+      "expect": "Blocking duplicate on userPrincipalName",
+      "note": "The current employee who loses to the leaver."
+    },
+    {
+      "sam": "kuntypedaddr",
+      "upn": "kuntypedaddr@example.com",
+      "ou": "Staff",
+      "proxyAddresses": ["kuntypedaddr@example.com"],
+      "defect": "UntypedProxyAddress",
+      "expect": "Blocking on proxyAddresses, stating there is no type prefix",
+      "note": "An address with no SMTP: prefix fails the whole object, not just that address."
+    },
+    {
+      "sam": "lsvc",
+      "upn": "lsvc@example.com",
+      "ou": "Service",
+      "defect": null,
+      "note": "Clean, but in the excluded nested OU. Exists to prove exclusion beats inclusion rather than the other way round."
+    }
+  ],
+  "scopeChange": {
+    "before": { "includeOu": ["Staff", "Retired"], "excludeOu": ["Service"] },
+    "after": { "includeOu": ["Staff"], "excludeOu": ["Service"] },
+    "deletionThreshold": 0,
+    "expect": "Critical, because dropping Retired from scope deletes its objects in the cloud rather than disabling them",
+    "note": "The change looks like housekeeping. A threshold of zero is this plan stating that a filter change must not delete anything at all -- the tolerant tiers exist for plans that knowingly accept some. Entra Connect's default of 500 would not stop this change, and would not stop 499 of them either."
+  }
+}
