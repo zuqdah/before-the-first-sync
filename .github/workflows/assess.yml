@@ -40,10 +40,38 @@ jobs:
       - name: Init
         run: terraform -chdir=infra init -input=false
 
+      # Capacity, not quota. The first live run failed with SkuNotAvailable
+      # "Capacity Restrictions" on a size that `az vm list-skus` did not report
+      # as restricted and for which the subscription had a quota of 10 -- so
+      # neither of the two things you would check in advance predicts it.
+      # Subscription restrictions are published; whether a cluster has room
+      # right now is not, and it changes.
+      #
+      # So the size is a list and the apply walks it. Only SkuNotAvailable
+      # moves to the next candidate: any other failure is about the
+      # configuration and retrying it with a different size would just take
+      # three times as long to report the same thing.
       - name: Apply
         env:
           ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
-        run: terraform -chdir=infra apply -input=false -auto-approve
+        run: |
+          set -uo pipefail
+          for size in Standard_D2s_v3 Standard_D2as_v4 Standard_D4s_v3; do
+            echo "::group::apply with $size"
+            if terraform -chdir=infra apply -input=false -auto-approve -var "vm_size=$size" 2>&1 | tee apply.log; then
+              echo "::endgroup::"
+              echo "applied with $size"
+              exit 0
+            fi
+            echo "::endgroup::"
+            if ! grep -q 'SkuNotAvailable' apply.log; then
+              echo "The apply failed for a reason other than capacity, so trying another size would not help." >&2
+              exit 1
+            fi
+            echo "$size has no capacity in this region right now; trying the next candidate."
+          done
+          echo "Every candidate size was refused for capacity." >&2
+          exit 1
 
       - name: Collect outputs
         id: out
@@ -175,4 +203,6 @@ jobs:
         if: always()
         env:
           ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+        # No size variable. A destroy works from state, so whichever candidate
+        # the apply settled on is the one that gets removed.
         run: terraform -chdir=infra destroy -input=false -auto-approve
