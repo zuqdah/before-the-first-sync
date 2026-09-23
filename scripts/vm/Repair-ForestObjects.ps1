@@ -88,3 +88,10 @@ foreach ($user in (Get-ADUser -Filter * -Properties userPrincipalName)) {
 }
 
 Write-Output "FIXED_TOTAL $fixed REFUSED_TOTAL $refused"
+
+# Run Command reports the invocation, not the script. An exception in here
+# still comes back as a successful call with the error buried in the response
+# body, so a caller that only reads the exit code sees success over a script
+# that threw -- which is how a half-built directory reached the assessment and
+# looked like a broken check. The caller asserts this line is present.
+Write-Output 'SCRIPT_OK'

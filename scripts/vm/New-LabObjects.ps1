@@ -123,6 +123,13 @@ foreach ($user in $plan.users) {
         Set-ADObject -Identity $target -Replace @{ userPrincipalName = $user.upn }
     }
 
+    # mail and proxyAddresses carry no uniqueness constraint in Active
+    # Directory, which is why the duplicates planted in this forest are on
+    # these attributes rather than on userPrincipalName.
+    if ($user.PSObject.Properties['mail'] -and $user.mail) {
+        Set-ADObject -Identity $target -Replace @{ mail = [string]$user.mail }
+    }
+
     if ($user.PSObject.Properties['proxyAddresses'] -and $user.proxyAddresses) {
         Set-ADObject -Identity $target -Replace @{ proxyAddresses = [string[]]$user.proxyAddresses }
     }
@@ -147,3 +154,10 @@ Write-Output "CREATED $created EXPECTED $expected PRESENT $present"
 if ($present -lt $expected) {
     throw "The plan declares $expected users and the forest holds $present in its organizational units. The assessment would report the missing ones as defects it failed to find."
 }
+
+# Run Command reports the invocation, not the script. An exception in here
+# still comes back as a successful call with the error buried in the response
+# body, so a caller that only reads the exit code sees success over a script
+# that threw -- which is how a half-built directory reached the assessment and
+# looked like a broken check. The caller asserts this line is present.
+Write-Output 'SCRIPT_OK'

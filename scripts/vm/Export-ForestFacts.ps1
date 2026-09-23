@@ -73,3 +73,10 @@ Write-Output "FACTS_BEGIN"
 Write-Output $encoded
 Write-Output "FACTS_END"
 Write-Output "users=$(@($users).Count) encoded=$($encoded.Length)B raw=$($bytes.Length)B"
+
+# Run Command reports the invocation, not the script. An exception in here
+# still comes back as a successful call with the error buried in the response
+# body, so a caller that only reads the exit code sees success over a script
+# that threw -- which is how a half-built directory reached the assessment and
+# looked like a broken check. The caller asserts this line is present.
+Write-Output 'SCRIPT_OK'

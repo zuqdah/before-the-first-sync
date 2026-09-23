@@ -156,16 +156,11 @@ jobs:
       - name: Build the directory objects
         run: |
           set -euo pipefail
-          payload=$(jq -c '{organizationalUnits, users: [.users[] | {sam, upn, ou, proxyAddresses, enabled}]}' lab-objects.json \
+          payload=$(jq -c '{organizationalUnits, users: [.users[] | {sam, upn, mail, ou, proxyAddresses, enabled}]}' lab-objects.json \
             | gzip -9 | base64 -w0)
           echo "plan payload: ${#payload} bytes encoded"
-          az vm run-command invoke \
-            --resource-group "${{ steps.out.outputs.resource_group }}" \
-            --name "${{ steps.out.outputs.vm_name }}" \
-            --command-id RunPowerShellScript \
-            --scripts @scripts/vm/New-LabObjects.ps1 \
-            --parameters "ObjectSetBase64=$payload" \
-            --query "value[0].message" -o tsv | tail -25
+          ./scripts/run-on-dc.sh "${{ steps.out.outputs.resource_group }}" "${{ steps.out.outputs.vm_name }}" \
+            scripts/vm/New-LabObjects.ps1 "ObjectSetBase64=$payload"
 
       - name: Read the forest
         id: facts
@@ -180,13 +175,8 @@ jobs:
 
       - name: Remediate what is safe to remediate
         run: |
-          set -euo pipefail
-          az vm run-command invoke \
-            --resource-group "${{ steps.out.outputs.resource_group }}" \
-            --name "${{ steps.out.outputs.vm_name }}" \
-            --command-id RunPowerShellScript \
-            --scripts @scripts/vm/Repair-ForestObjects.ps1 \
-            --query "value[0].message" -o tsv | tail -25
+          ./scripts/run-on-dc.sh "${{ steps.out.outputs.resource_group }}" "${{ steps.out.outputs.vm_name }}" \
+            scripts/vm/Repair-ForestObjects.ps1
 
       - name: Read the forest again
         run: ./scripts/read-forest.sh "${{ steps.out.outputs.resource_group }}" "${{ steps.out.outputs.vm_name }}" forest-facts-after.json

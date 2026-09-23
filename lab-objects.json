@@ -41,19 +41,20 @@
     },
     {
       "sam": "edupe",
-      "upn": "shared@example.com",
+      "upn": "edupe@example.com",
+      "mail": "shared@example.com",
       "ou": "Staff",
-      "proxyAddresses": ["SMTP:shared@example.com"],
-      "defect": "DuplicateUpn",
-      "expect": "Blocking duplicate on userPrincipalName, naming both edupe and fdupe",
-      "note": "One half of a pair. Uniqueness cannot be judged an object at a time, which is why this needs the whole set."
+      "defect": "DuplicateMail",
+      "expect": "Blocking duplicate on mail, naming both edupe and fdupe",
+      "note": "One half of a pair. Uniqueness cannot be judged an object at a time, which is why this needs the whole set. The duplicate is planted on mail rather than userPrincipalName because Active Directory will not create or write a duplicate UPN at all, whatever tooling you use -- so the duplicate that reaches Entra from a single forest is always this one."
     },
     {
       "sam": "fdupe",
-      "upn": "shared@example.com",
+      "upn": "fdupe@example.com",
+      "mail": "shared@example.com",
       "ou": "Staff",
-      "defect": "DuplicateUpn",
-      "expect": "Blocking duplicate on userPrincipalName, naming both edupe and fdupe",
+      "defect": "DuplicateMail",
+      "expect": "Blocking duplicate on mail, naming both edupe and fdupe",
       "note": "The other half."
     },
     {
@@ -76,19 +77,21 @@
     },
     {
       "sam": "ileaver",
-      "upn": "jcurrent@example.com",
+      "upn": "ileaver@example.com",
+      "mail": "jcurrent@example.com",
       "ou": "Retired",
       "enabled": false,
       "defect": "DisabledDuplicate",
-      "expect": "Blocking duplicate on userPrincipalName, and the detail must say the disabled object is not exempt",
+      "expect": "Blocking duplicate on mail, and the detail must say the disabled object is not exempt",
       "note": "A disabled leaver holding the name a current employee needs. Invisible in every list anybody thinks to check, and the reason the new starter will not sync."
     },
     {
       "sam": "jcurrent",
       "upn": "jcurrent@example.com",
+      "mail": "jcurrent@example.com",
       "ou": "Staff",
       "defect": "DisabledDuplicate",
-      "expect": "Blocking duplicate on userPrincipalName",
+      "expect": "Blocking duplicate on mail",
       "note": "The current employee who loses to the leaver."
     },
     {

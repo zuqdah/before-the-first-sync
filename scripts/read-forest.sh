@@ -29,6 +29,14 @@ raw=$(az vm run-command invoke \
 # is read against how much was actually exported.
 echo "$raw" | grep -E '^users=' || true
 
+# Run Command reports the call, not the script, so the sentinel is the only
+# reliable signal that the export ran to completion.
+if ! grep -q "SCRIPT_OK" <<<"$raw"; then
+  echo "The export did not reach its end. Run Command reported the call as successful, which it was -- the script inside it was not." >&2
+  echo "$raw" | tail -20 >&2
+  exit 1
+fi
+
 encoded=$(echo "$raw" | sed -n '/FACTS_BEGIN/,/FACTS_END/p' | sed '1d;$d' | tr -d '\r\n ')
 
 if [ -z "$encoded" ]; then
