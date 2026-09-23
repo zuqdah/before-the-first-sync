@@ -103,7 +103,14 @@ resource "azurerm_windows_virtual_machine" "dc" {
 
   # No boot diagnostics storage account. Run Command returns what the scripts
   # print, and a serial console nobody reads is another resource to tear down.
-  patch_mode = "Manual"
+  #
+  # Manual patching, because this machine lives about twenty-five minutes and
+  # an automatic update rebooting it mid-assessment would look exactly like the
+  # promotion reboot the workflow is already waiting through. Azure requires
+  # enable_automatic_updates to be false alongside it and rejects the pair at
+  # apply time otherwise, which is a 400 rather than a plan-time error.
+  patch_mode               = "Manual"
+  enable_automatic_updates = false
 
   tags = {
     lab = var.prefix
