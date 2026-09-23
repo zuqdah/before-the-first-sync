@@ -12,15 +12,16 @@ variable "prefix" {
 
 variable "vm_size" {
   description = <<-EOT
-    Standard_D2as_v4: 2 vCPU and 8 GB, which is enough to promote a domain
-    controller. Checked against both `az vm list-skus` and `az vm list-usage`
-    before choosing, because a SKU can be offered in a region while the
-    subscription has a quota of zero for its family -- Azure reports that as
-    "Capacity Restrictions", which reads like a transient shortage rather than
-    a limit on the account. Bsv2 and DASv5 are both at zero here.
+    Standard_D2als_v7, because it is the size this subscription has actually
+    been able to place. Quota is not the test: the v3 and v4 families have a
+    quota of 10 in every region checked and were refused for "Capacity
+    Restrictions" in all of them, while az vm list-skus reported no
+    restriction on either. Published restrictions are subscription-level;
+    whether a cluster can take the VM right now is neither published nor
+    stable, so the workflow walks candidates rather than trusting one.
   EOT
   type        = string
-  default     = "Standard_D2as_v4"
+  default     = "Standard_D2als_v7"
 }
 
 variable "admin_username" {

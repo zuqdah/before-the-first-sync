@@ -62,8 +62,15 @@ jobs:
           # message tells you to do next: "deploy to a different location".
           # Quota is 10 for these families in every region checked, so quota is
           # not the constraint anywhere -- capacity is, and it is regional.
-          for location in eastus2 centralus westus2 southcentralus canadacentral; do
-            for size in Standard_D2s_v3 Standard_D2as_v4; do
+          # Standard_D2als_v7 first because it is the one size known to have
+          # actually deployed on this subscription. An earlier run walked
+          # Standard_D2s_v3 and Standard_D2as_v4 across five regions and was
+          # refused all ten times -- both families have a quota of 10
+          # everywhere, so quota said yes and capacity said no in every
+          # region at once, which is not what regional exhaustion looks like.
+          # The v7 families are the ones this subscription can actually place.
+          for location in eastus2 centralus westus2; do
+            for size in Standard_D2als_v7 Standard_D2as_v7 Standard_B2ms; do
               echo "::group::apply $size in $location"
               if terraform -chdir=infra apply -input=false -auto-approve \
                    -var "vm_size=$size" -var "location=$location" 2>&1 | tee apply.log; then
