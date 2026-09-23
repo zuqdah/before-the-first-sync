@@ -143,17 +143,82 @@ fails, because a lab that only cleans up on the happy path bills for its own
 bugs. A nightly workflow removes anything a cancelled run left behind, deleting
 by resource group name rather than from state.
 
+## What nine live runs found
+
+Three failures were Azure, two were mine, and four were genuine discoveries
+about how the real thing behaves. The last group is why this lab is worth
+reading.
+
+**Neither quota nor the SKU restriction list predicts whether Azure will place
+a VM.** `Standard_D2s_v3` and `Standard_D2as_v4` were both refused with
+`SkuNotAvailable: Capacity Restrictions` across five regions consecutively —
+while the subscription had a quota of 10 for both families in every one of
+those regions, and `az vm list-skus` reported no restriction on either.
+Published restrictions are subscription-level; whether a cluster has room right
+now is neither published nor stable. The apply now walks a candidate list.
+
+**A duplicate `userPrincipalName` cannot be planted inside a single forest.**
+Active Directory enforces UPN uniqueness on `New-ADUser` *and* on
+`Set-ADObject`, so the second half of the pair was refused both ways. That is
+worth knowing beyond this lab: **the duplicate that actually reaches Entra from
+one forest is on `mail` or `proxyAddresses`**, which carry no uniqueness
+constraint. Duplicate UPNs arrive when two forests are consolidated, which is
+why the module still checks them and the planted defects moved.
+
+**`az vm run-command invoke` reports success over a script that threw.** It
+reports on the invocation, not the script — an exception comes back as a
+successful call with the error in the response body. The object-count assertion
+never ran, the step went green, and the symptom surfaced three steps later as
+an assessment that could not find defects nobody had created. Every script on
+the machine now ends with a sentinel and the callers insist on it.
+
+**The lab generated the noise it criticises.** An early run reported `krbtgt`,
+`Guest` and the machine's own administrator as Blocking for having no UPN —
+true, useless, and never in sync scope. Both the export and the remediation are
+now scoped to organizational units, the way a real assessment would be.
+
+The two that were mine: `patch_mode = "Manual"` needs
+`automatic_updates_enabled = false` alongside it, which Azure rejects as a 400
+at apply time rather than at plan time; and the argument is named
+`automatic_updates_enabled` rather than `enable_automatic_updates` in azurerm
+5.x, which `terraform validate` had already said locally in the same command
+where the run was triggered.
+
 ## Status
 
 | | |
 |---|---|
 | Unit tests | 40, green, no forest required |
 | PSScriptAnalyzer, `terraform validate`, `tflint`, `checkov`, `actionlint`, `shellcheck` | clean |
-| Assessment against synthetic facts | passes: 10/10 defects found, 0 false positives, scope change `Critical` |
-| Live run against a real forest | not yet run |
+| Live run against a real forest | **passes** end to end |
+| Teardown | **verified** against Azure afterwards |
 
-This section will say so plainly until the assessment has run end to end against
-a domain controller.
+From the passing run, against a forest promoted from scratch:
+
+```
+applied Standard_D2als_v7 in eastus2
+CREATED 12  EXPECTED 12  PRESENT 12
+decoded 12 user(s)
+
+assessment                10 declared, 7 blocking, 0 unevaluated
+                          every declared defect found, nothing clean reported
+scope change              Critical: 1 object would be deleted, 9.1% of the estate
+
+remediation               FIXED   dspaced       'd spaced@...' -> 'dspaced@...'
+                          FIXED   kuntypedaddr  proxyAddresses typed
+                          REFUSED bunverified   suffix 'corp.local' unverifiable
+                          REFUSED cnoupn        choosing a sign-in name is not mechanical
+
+re-assessment             10 declared, 5 blocking, 0 unevaluated
+```
+
+Blocking findings drop from **7 to 5**: the two mechanical defects are gone and
+every judgement call is still there. That is the boundary holding under test —
+a remediation pass that came back clean would have decided which of two people
+keeps a name, or rewritten what somebody signs in with.
+
+A run costs about **$0.08** and takes roughly 25 minutes, most of which is
+promoting the domain controller and waiting out its reboot.
 
 ## What this does not do
 
