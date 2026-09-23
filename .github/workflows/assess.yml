@@ -56,21 +56,31 @@ jobs:
           ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
         run: |
           set -uo pipefail
-          for size in Standard_D2s_v3 Standard_D2as_v4 Standard_D4s_v3; do
-            echo "::group::apply with $size"
-            if terraform -chdir=infra apply -input=false -auto-approve -var "vm_size=$size" 2>&1 | tee apply.log; then
+
+          # Region as well as size. The second live run walked all three sizes
+          # in eastus2 and every one was refused, which is what Azure's own
+          # message tells you to do next: "deploy to a different location".
+          # Quota is 10 for these families in every region checked, so quota is
+          # not the constraint anywhere -- capacity is, and it is regional.
+          for location in eastus2 centralus westus2 southcentralus canadacentral; do
+            for size in Standard_D2s_v3 Standard_D2as_v4; do
+              echo "::group::apply $size in $location"
+              if terraform -chdir=infra apply -input=false -auto-approve \
+                   -var "vm_size=$size" -var "location=$location" 2>&1 | tee apply.log; then
+                echo "::endgroup::"
+                echo "applied $size in $location"
+                echo "SETTLED=$size in $location" >> "$GITHUB_STEP_SUMMARY"
+                exit 0
+              fi
               echo "::endgroup::"
-              echo "applied with $size"
-              exit 0
-            fi
-            echo "::endgroup::"
-            if ! grep -q 'SkuNotAvailable' apply.log; then
-              echo "The apply failed for a reason other than capacity, so trying another size would not help." >&2
-              exit 1
-            fi
-            echo "$size has no capacity in this region right now; trying the next candidate."
+              if ! grep -q 'SkuNotAvailable' apply.log; then
+                echo "The apply failed for a reason other than capacity, so trying elsewhere would not help." >&2
+                exit 1
+              fi
+              echo "$size has no capacity in $location; trying the next candidate."
+            done
           done
-          echo "Every candidate size was refused for capacity." >&2
+          echo "Every candidate size was refused for capacity in every candidate region." >&2
           exit 1
 
       - name: Collect outputs
