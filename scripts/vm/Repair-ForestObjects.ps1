@@ -38,7 +38,13 @@ $illegal = @('\', '/', '[', ']', ':', ';', '|', '=', ',', '+', '*', '?', '<', '>
 $fixed = 0
 $refused = 0
 
-foreach ($user in (Get-ADUser -Filter * -Properties userPrincipalName, proxyAddresses)) {
+# Scoped to organizational units, for the same reason the export is: the
+# built-in CN=Users container holds krbtgt, Guest and the machine own
+# administrator, and a first live run duly listed all three as refusals. They
+# are never in sync scope, so reporting decisions about them is the noise this
+# lab exists to avoid.
+foreach ($user in (Get-ADUser -Filter * -Properties userPrincipalName, proxyAddresses |
+        Where-Object { $_.DistinguishedName -match ",OU=" })) {
     $label = $user.sAMAccountName
 
     $upn = [string]$user.userPrincipalName
@@ -75,7 +81,8 @@ foreach ($user in (Get-ADUser -Filter * -Properties userPrincipalName, proxyAddr
 
 # Named rather than counted, so the report says which decisions were left to a
 # human instead of just how many.
-foreach ($user in (Get-ADUser -Filter * -Properties userPrincipalName)) {
+foreach ($user in (Get-ADUser -Filter * -Properties userPrincipalName |
+        Where-Object { $_.DistinguishedName -match ",OU=" })) {
     $upn = [string]$user.userPrincipalName
     if (-not $upn) {
         Write-Output "REFUSED $($user.sAMAccountName) no userPrincipalName: choosing a sign-in name is not a mechanical fix"
